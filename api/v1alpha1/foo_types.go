@@ -45,6 +45,7 @@ type FooStatus struct {
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
 
 // Foo is the Schema for the foos API
 type Foo struct {
