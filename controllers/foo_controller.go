@@ -80,6 +80,80 @@ func (r *FooReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		return ctrl.Result{}, err
 	}
 
+	/*
+		### 3: Create or Update deployment object which match foo.Spec.
+		We'll use ctrl.CreateOrUpdate method.
+		It enable us to create an object if it doesn't exist.
+		Or it enable us to update the object if it exists.
+	*/
+
+	// get deploymentName from foo.Spec
+	deploymentName := foo.Spec.DeploymentName
+
+	// define deployment template using deploymentName
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      deploymentName,
+			Namespace: req.Namespace,
+		},
+	}
+
+	// Create or Update deployment object
+	if _, err := ctrl.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+
+		// set the replicas from foo.Spec
+		replicas := int32(1)
+		if foo.Spec.Replicas != nil {
+			replicas = *foo.Spec.Replicas
+		}
+		deploy.Spec.Replicas = &replicas
+
+		// set a label for our deployment
+		labels := map[string]string{
+			"app":        "nginx",
+			"controller": req.Name,
+		}
+
+		// set labels to spec.selector for our deployment
+		if deploy.Spec.Selector == nil {
+			deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
+		}
+
+		// set labels to template.objectMeta for our deployment
+		if deploy.Spec.Template.ObjectMeta.Labels == nil {
+			deploy.Spec.Template.ObjectMeta.Labels = labels
+		}
+
+		// set a container for our deployment
+		containers := []corev1.Container{
+			{
+				Name:  "nginx",
+				Image: "nginx:latest",
+			},
+		}
+
+		// set containers to template.spec.containers for our deployment
+		if deploy.Spec.Template.Spec.Containers == nil {
+			deploy.Spec.Template.Spec.Containers = containers
+		}
+
+		// set the owner so that garbage collection can kicks in
+		if err := ctrl.SetControllerReference(&foo, deploy, r.Scheme); err != nil {
+			log.Error(err, "unable to set ownerReference from Foo to Deployment")
+			return err
+		}
+
+		// end of ctrl.CreateOrUpdate
+		return nil
+
+	}); err != nil {
+
+		// error handling of ctrl.CreateOrUpdate
+		log.Error(err, "unable to ensure deployment is correct")
+		return ctrl.Result{}, err
+
+	}
+
 	return ctrl.Result{}, nil
 }
 
