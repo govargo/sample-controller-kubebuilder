@@ -44,8 +44,8 @@ type FooReconciler struct {
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *FooReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
-	_ = context.Background()
-	_ = r.Log.WithValues("foo", req.NamespacedName)
+	ctx := context.Background()
+	log := r.Log.WithValues("foo", req.NamespacedName)
 
 	// your logic here
 
