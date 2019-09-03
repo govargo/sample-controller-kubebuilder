@@ -33,7 +33,9 @@ import (
 // FooReconciler reconciles a Foo object
 type FooReconciler struct {
 	client.Client
-	Log logr.Logger
+	Log      logr.Logger
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=samplecontroller.k8s.io,resources=foos,verbs=get;list;watch;create;update;patch;delete
