@@ -154,6 +154,43 @@ func (r *FooReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 
 	}
 
+	/*
+		### 4: Update foo status.
+		First, we get deployment object from in-memory-cache.
+		Second, we get deployment.status.AvailableReplicas in order to update foo.status.AvailableReplicas.
+		Third, we update foo.status from deployment.status.AvailableReplicas.
+		Finally, finish reconcile. and the next reconcile loop would start unless controller process ends.
+	*/
+
+	// get deployment object from in-memory-cache
+	var deployment appsv1.Deployment
+	var deploymentNamespacedName = client.ObjectKey{Namespace: req.Namespace, Name: foo.Spec.DeploymentName}
+	if err := r.Get(ctx, deploymentNamespacedName, &deployment); err != nil {
+		log.Error(err, "unable to fetch Deployment")
+		// we'll ignore not-found errors, since they can't be fixed by an immediate
+		// requeue (we'll need to wait for a new notification), and we can get them
+		// on deleted requests.
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// set foo.status.AvailableReplicas from deployment
+	availableReplicas := deployment.Status.AvailableReplicas
+	if availableReplicas == foo.Status.AvailableReplicas {
+		// if availableReplicas equals availableReplicas, we wouldn't update anything.
+		// exit Reconcile func without updating foo.status
+		return ctrl.Result{}, nil
+	}
+	foo.Status.AvailableReplicas = availableReplicas
+
+	// update foo.status
+	if err := r.Status().Update(ctx, &foo); err != nil {
+		log.Error(err, "unable to update Foo status")
+		return ctrl.Result{}, err
+	}
+
+	// create event for updated foo.status
+	r.Recorder.Eventf(&foo, corev1.EventTypeNormal, "Updated", "Update foo.status.AvailableReplicas: %d", foo.Status.AvailableReplicas)
+
 	return ctrl.Result{}, nil
 }
 
