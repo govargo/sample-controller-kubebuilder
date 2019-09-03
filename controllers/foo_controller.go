@@ -98,7 +98,9 @@ func (r *FooReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	// define to watch targets...Foo resource and owned Deployment
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&samplecontrollerv1alpha1.Foo{}).
+		Owns(&appsv1.Deployment{}).
 		Complete(r)
 }
