@@ -71,7 +71,33 @@ func (r *FooReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	return ctrl.Result{}, nil
 }
 
+var (
+	deploymentOwnerKey = ".metadata.controller"
+	apiGVStr           = samplecontrollerv1alpha1.GroupVersion.String()
+)
+
+// setup with controller manager
 func (r *FooReconciler) SetupWithManager(mgr ctrl.Manager) error {
+
+	// add deploymentOwnerKey index to deployment object which foo resource owns
+	if err := mgr.GetFieldIndexer().IndexField(&appsv1.Deployment{}, deploymentOwnerKey, func(rawObj runtime.Object) []string {
+		// grab the deployment object, extract the owner...
+		deployment := rawObj.(*appsv1.Deployment)
+		owner := metav1.GetControllerOf(deployment)
+		if owner == nil {
+			return nil
+		}
+		// ...make sure it's a Foo...
+		if owner.APIVersion != apiGVStr || owner.Kind != "Foo" {
+			return nil
+		}
+
+		// ...and if so, return it
+		return []string{owner.Name}
+	}); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&samplecontrollerv1alpha1.Foo{}).
 		Complete(r)
