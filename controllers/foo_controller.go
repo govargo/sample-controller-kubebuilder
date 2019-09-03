@@ -71,6 +71,39 @@ func (r *FooReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 	return ctrl.Result{}, nil
 }
 
+// cleanupOwnedResources will delete any existing Deployment resources that
+// were created for the given Foo that no longer match the
+// foo.spec.deploymentName field.
+func (r *FooReconciler) cleanupOwnedResources(ctx context.Context, log logr.Logger, foo *samplecontrollerv1alpha1.Foo) error {
+	log.Info("finding existing Deployments for Foo resource")
+
+	// List all deployment resources owned by this Foo
+	var deployments appsv1.DeploymentList
+	if err := r.List(ctx, &deployments, client.InNamespace(foo.Namespace), client.MatchingFields(map[string]string{deploymentOwnerKey: foo.Name})); err != nil {
+		return err
+	}
+
+	// Delete deployment if the deployment name doesn't match foo.spec.deploymentName
+	for _, deployment := range deployments.Items {
+		if deployment.Name == foo.Spec.DeploymentName {
+			// If this deployment's name matches the one on the Foo resource
+			// then do not delete it.
+			continue
+		}
+
+		// Delete old deployment object which doesn't match foo.spec.deploymentName
+		if err := r.Delete(ctx, &deployment); err != nil {
+			log.Error(err, "failed to delete Deployment resource")
+			return err
+		}
+
+		log.Info("delete deployment resource: " + deployment.Name)
+		r.Recorder.Eventf(foo, corev1.EventTypeNormal, "Deleted", "Deleted deployment %q", deployment.Name)
+	}
+
+	return nil
+}
+
 var (
 	deploymentOwnerKey = ".metadata.controller"
 	apiGVStr           = samplecontrollerv1alpha1.GroupVersion.String()
