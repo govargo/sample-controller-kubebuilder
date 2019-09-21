@@ -2,7 +2,11 @@
 
 This Controller is developed by Kubebuilder v2.0.0
 
-技術書典7で頒布した「実践入門 Kubernetesカスタムコントローラへの道」の第五章に掲載したサンプルコード用のリポジトリです。
+技術書典7で頒布した「実践入門 Kubernetesカスタムコントローラへの道」の第五章に掲載したサンプルコード用のリポジトリです。  
+このブランチは、第五章に掲載したサンプルコードとは異なる実装を参考として掲載しています。  
+
+masterブランチでは、`controllerutil.CreateOrUpdate`を使った実装でReconcileし、  
+feature/sample-controllerブランチでは、`controllerutil.CreateOrUpdate`を使わない実装でReconcileを行います。
 
 ## What is this Controller
 
