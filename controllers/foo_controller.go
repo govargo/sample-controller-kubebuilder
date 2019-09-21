@@ -21,6 +21,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
@@ -87,91 +88,63 @@ func (r *FooReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error) {
 		Or it enable us to update the object if it exists.
 	*/
 
-	// get deploymentName from foo.Spec
-	deploymentName := foo.Spec.DeploymentName
+	var deployment appsv1.Deployment
+	var deploymentNamespacedName = client.ObjectKey{Namespace: req.Namespace, Name: foo.Spec.DeploymentName}
 
-	// define deployment template using deploymentName
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      deploymentName,
-			Namespace: req.Namespace,
-		},
-	}
+	// get deployment object from in-memory-cache
+	err := r.Get(ctx, deploymentNamespacedName, &deployment)
 
-	// Create or Update deployment object
-	if _, err := ctrl.CreateOrUpdate(ctx, r.Client, deploy, func() error {
+	// create deployment which has deploymentName and replicas by newDeployment method if it doesn't exist
+	if apierrors.IsNotFound(err) {
+		log.Error(err, "unable to find existing Deployment for Foo, creating one...")
 
-		// set the replicas from foo.Spec
-		replicas := int32(1)
-		if foo.Spec.Replicas != nil {
-			replicas = *foo.Spec.Replicas
-		}
-		deploy.Spec.Replicas = &replicas
+		// build deployment with ObjectMeta & Spec
+		deployment = *newDeployment(&foo)
 
-		// set a label for our deployment
-		labels := map[string]string{
-			"app":        "nginx",
-			"controller": req.Name,
+		// create deployment object via api-server
+		if err := r.Client.Create(ctx, &deployment); err != nil {
+			log.Error(err, "failed to create Deployment resource")
+			// Error creating the object - requeue the request.
+			return ctrl.Result{}, err
 		}
 
-		// set labels to spec.selector for our deployment
-		if deploy.Spec.Selector == nil {
-			deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
-		}
+		r.Recorder.Eventf(&foo, corev1.EventTypeNormal, "Created", "Created deployment %q", deployment.Name)
+		log.Info("created Deployment resource for Foo")
 
-		// set labels to template.objectMeta for our deployment
-		if deploy.Spec.Template.ObjectMeta.Labels == nil {
-			deploy.Spec.Template.ObjectMeta.Labels = labels
-		}
-
-		// set a container for our deployment
-		containers := []corev1.Container{
-			{
-				Name:  "nginx",
-				Image: "nginx:latest",
-			},
-		}
-
-		// set containers to template.spec.containers for our deployment
-		if deploy.Spec.Template.Spec.Containers == nil {
-			deploy.Spec.Template.Spec.Containers = containers
-		}
-
-		// set the owner so that garbage collection can kicks in
-		if err := ctrl.SetControllerReference(&foo, deploy, r.Scheme); err != nil {
-			log.Error(err, "unable to set ownerReference from Foo to Deployment")
-			return err
-		}
-
-		// end of ctrl.CreateOrUpdate
-		return nil
-
-	}); err != nil {
-
-		// error handling of ctrl.CreateOrUpdate
-		log.Error(err, "unable to ensure deployment is correct")
-		return ctrl.Result{}, err
-
+		return ctrl.Result{}, nil
 	}
 
 	/*
-		### 4: Update foo status.
+		### 4: Update deployment spec if it isn't desire state.
+		We compare foo.spec.replicas and deployment.spec.replicas.
+		If it doesn't correct, we'll use Update method to reconcile deployment state.
+	*/
+
+	// compare foo.spec.replicas and deployment.spec.replicas
+	if foo.Spec.Replicas != nil && *foo.Spec.Replicas != *deployment.Spec.Replicas {
+		log.Info("unmatch spec", "foo.Spec.Replicas: ", *foo.Spec.Replicas, "deployment.Spec.Replicas: ", *deployment.Spec.Replicas)
+		log.Info("Deployment replicas is not equal Foo replicas. reconcile this...")
+
+		// Update deployment spec
+		if err := r.Update(ctx, newDeployment(&foo)); err != nil {
+			log.Error(err, "failed to update Deployment for Foo resource")
+			// Error updating the object - requeue the request.
+			return ctrl.Result{}, err
+		}
+
+		log.Info("updated Deployment spec for Foo")
+		r.Recorder.Eventf(&foo, corev1.EventTypeNormal, "Scaled", "Scaled deployment %q to %d replicas", deployment.Name, *foo.Spec.Replicas)
+
+		return ctrl.Result{}, nil
+	}
+
+	/*
+		### 5: Update foo status.
 		First, we get deployment object from in-memory-cache.
 		Second, we get deployment.status.AvailableReplicas in order to update foo.status.AvailableReplicas.
 		Third, we update foo.status from deployment.status.AvailableReplicas.
 		Finally, finish reconcile. and the next reconcile loop would start unless controller process ends.
 	*/
-
-	// get deployment object from in-memory-cache
-	var deployment appsv1.Deployment
-	var deploymentNamespacedName = client.ObjectKey{Namespace: req.Namespace, Name: foo.Spec.DeploymentName}
-	if err := r.Get(ctx, deploymentNamespacedName, &deployment); err != nil {
-		log.Error(err, "unable to fetch Deployment")
-		// we'll ignore not-found errors, since they can't be fixed by an immediate
-		// requeue (we'll need to wait for a new notification), and we can get them
-		// on deleted requests.
-		return ctrl.Result{}, client.IgnoreNotFound(err)
-	}
 
 	// set foo.status.AvailableReplicas from deployment
 	availableReplicas := deployment.Status.AvailableReplicas
@@ -225,6 +198,44 @@ func (r *FooReconciler) cleanupOwnedResources(ctx context.Context, log logr.Logg
 	}
 
 	return nil
+}
+
+// newDeployment creates a new Deployment for a Foo resource. It also sets
+// the appropriate OwnerReferences on the resource so handleObject can discover
+// the Foo resource that 'owns' it.
+func newDeployment(foo *samplecontrollerv1alpha1.Foo) *appsv1.Deployment {
+	labels := map[string]string{
+		"app":        "nginx",
+		"controller": foo.Name,
+	}
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      foo.Spec.DeploymentName,
+			Namespace: foo.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(foo, samplecontrollerv1alpha1.GroupVersion.WithKind("Foo")),
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: foo.Spec.Replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:  "nginx",
+							Image: "nginx:latest",
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 var (
